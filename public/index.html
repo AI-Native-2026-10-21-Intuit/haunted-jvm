@@ -1,0 +1,851 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>The Haunted JVM</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik+Wet+Paint&family=Dela+Gothic+One&family=Outfit:wght@400;600;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<style>:root{padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)}body{margin:0}[hidden]{display:none!important}html[data-conn="down"] .hud{box-shadow:inset 0 -4px 0 #ff4b4b}</style>
+<style>
+/* Layout: live party game. Host view = projector stage (question, timer, reveal, board); player view = big tap buttons on phones. Halloween night palette with bone-white sticker outlines; deliberately single dark theme. */
+:root{
+  --night:#130c1f; --panel:#21173a; --panel-2:#2c1f4a; --bone:#fbf3e4; --muted:#b8a9d6;
+  --pumpkin:#ff7a1a; --candy:#ff4fa3; --slime:#a6f23a; --ghost:#7fd3ff; --blood:#ff4b4b; --good:#2fd47a;
+  --code:#0d0816; --tk:#ff8fd0; --ts:#a6f23a; --tc:#8e81aa; --tt:#7fd3ff; --tn:#ffcf5c;
+  --f-drip:"Rubik Wet Paint","Dela Gothic One",Impact,sans-serif;
+  --f-display:"Dela Gothic One","Arial Black",Impact,sans-serif;
+  --f-body:"Outfit","Segoe UI",system-ui,sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+  --b:3px solid var(--bone); --sh:5px 5px 0 var(--pumpkin);
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{min-height:100%}
+body{margin:0;background:var(--night);color:var(--bone);font-family:var(--f-body);font-size:17px;line-height:1.45;overflow-x:hidden;
+  background-image:radial-gradient(600px 380px at 85% -8%,rgba(255,122,26,.22),transparent 70%),radial-gradient(500px 300px at 0% 110%,rgba(166,242,58,.10),transparent 70%)}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--panel)}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:3px solid var(--pumpkin);outline-offset:3px}
+
+/* spooky sky */
+.sky{position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden}
+.moon{position:absolute;top:70px;right:1.5%;width:64px;height:64px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#fff6dc,#f3d79b 60%,#d9b46a);box-shadow:0 0 50px 10px rgba(255,207,92,.25)}
+.bat{position:absolute;width:40px;fill:#05020a;opacity:.85}
+.bat:nth-child(2){top:140px}.bat:nth-child(3){top:250px;width:28px}.bat:nth-child(4){top:70px;width:22px}
+@media (prefers-reduced-motion:no-preference){
+  .bat{animation:fly linear infinite}
+  .bat:nth-child(2){animation-duration:21s}.bat:nth-child(3){animation-duration:28s;animation-delay:-9s}.bat:nth-child(4){animation-duration:35s;animation-delay:-20s}
+  @keyframes fly{0%{transform:translate(-80px,0)}25%{transform:translate(25vw,30px) scaleY(.6)}50%{transform:translate(50vw,-10px)}75%{transform:translate(75vw,25px) scaleY(.6)}100%{transform:translate(110vw,0)}}
+  .pop{animation:pop .35s ease}@keyframes pop{0%{transform:scale(.94)}60%{transform:scale(1.03)}100%{transform:scale(1)}}
+  .shake{animation:shake .3s}@keyframes shake{25%{transform:translateX(-7px)}75%{transform:translateX(7px)}}
+  .float{animation:up 1.1s ease forwards}@keyframes up{from{opacity:1;transform:translate(-50%,-20%)}to{opacity:0;transform:translate(-50%,-140%)}}
+}
+
+.wrap{position:relative;z-index:1;max-width:1000px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.hud{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:rgba(33,23,58,.94);border-bottom:var(--b)}
+.hud .wrap{display:flex;align-items:center;gap:10px 14px;flex-wrap:wrap;padding-block:10px}
+.logo{font-family:var(--f-drip);font-size:1.5rem;color:var(--pumpkin);margin-right:auto;letter-spacing:.02em;text-shadow:2px 2px 0 #000}
+.pill{border:var(--b);border-radius:999px;padding:3px 12px;font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap;background:var(--panel-2)}
+.pill.o{background:var(--pumpkin);color:#1b0d02;border-color:#1b0d02}
+.pill.t{background:var(--ghost);color:#08131c;border-color:#08131c;min-width:64px;text-align:center}
+.pill.t.low{background:var(--blood);color:#fff}
+
+main{padding-block:22px 70px}
+.stage{background:var(--panel);border:var(--b);box-shadow:8px 8px 0 var(--pumpkin);border-radius:20px;padding:30px;display:grid;gap:30px}
+.stage>h3{margin-bottom:-14px}
+.stage .row{row-gap:14px}
+.bars{gap:12px}
+@media (max-width:560px){.stage{padding:20px;gap:20px}.stage>h3{margin-bottom:-8px}}
+h1,h2,h3{margin:0;font-weight:400;line-height:1.05;text-wrap:balance}
+h1{font-family:var(--f-drip);font-size:clamp(2.6rem,10vw,5.4rem);color:var(--pumpkin);text-shadow:4px 4px 0 #000}
+h2{font-family:var(--f-display);font-size:clamp(1.5rem,4.5vw,2.4rem)}
+h3{font-family:var(--f-display);font-size:1.2rem}
+p{margin:0;max-width:64ch}
+.sub{color:var(--muted);font-size:1.08rem}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.sticker{display:inline-block;justify-self:start;width:max-content;max-width:100%;border:2px solid #000;border-radius:10px;padding:2px 10px;font-weight:800;box-shadow:3px 3px 0 #000;transform:rotate(-2deg);font-size:.92rem;color:#120a04}
+.st-o{background:var(--pumpkin)}.st-g{background:var(--slime)}.st-p{background:var(--candy);color:#fff}.st-b{background:var(--ghost)}
+.btn{border:3px solid #000;border-radius:14px;background:var(--pumpkin);color:#140a02;box-shadow:5px 5px 0 #000;padding:12px 22px;font-weight:800;font-size:1.08rem;transition:transform .08s,box-shadow .08s}
+.btn:active{transform:translate(4px,4px);box-shadow:1px 1px 0 #000}
+.btn.g{background:var(--slime)}.btn.p{background:var(--candy);color:#fff}.btn.b{background:var(--ghost)}.btn.q{background:var(--panel-2);color:var(--bone);border-color:var(--bone);box-shadow:5px 5px 0 #000}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.input{border:var(--b);border-radius:12px;padding:12px 14px;font:inherit;font-weight:600;background:var(--night);color:var(--bone);min-width:0;width:min(100%,320px)}
+.note{font-size:.9rem;color:var(--muted)}
+.card{border:var(--b);border-radius:14px;background:var(--panel-2);padding:18px;display:grid;gap:12px}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:12px}
+
+/* question */
+.qhead{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+.prompt{font-family:var(--f-display);font-size:clamp(1.3rem,3.6vw,2rem);line-height:1.15}
+.timer{height:14px;border:var(--b);border-radius:999px;overflow:hidden;background:var(--night)}
+.timer i{display:block;height:100%;width:100%;background:linear-gradient(90deg,var(--slime),var(--pumpkin),var(--blood));transform-origin:left;transition:transform .25s linear}
+pre.code{margin:0;background:var(--code);border:var(--b);border-radius:12px;padding:12px 14px;font-family:var(--f-mono);font-size:.92rem;line-height:1.6;overflow-x:auto}
+.tk{color:var(--tk)}.ts{color:var(--ts)}.tc{color:var(--tc);font-style:italic}.tt{color:var(--tt)}.tn{color:var(--tn)}
+.lines{background:var(--code);border:var(--b);border-radius:12px;padding:8px 0;font-family:var(--f-mono);font-size:.9rem;line-height:1.6;overflow-x:auto}
+.ln{display:grid;grid-template-columns:2.6em max-content;width:100%;text-align:left;border:none;background:transparent;padding:2px 14px 2px 0;white-space:pre;font:inherit;color:var(--bone)}
+.ln .n{color:var(--tc);text-align:right;padding-right:12px}
+button.ln:hover{background:rgba(255,122,26,.2)}
+.ln.pick{background:rgba(127,211,255,.28)}.ln.good{background:rgba(47,212,122,.42)}.ln.bad{background:rgba(255,75,75,.4)}
+.opts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));gap:12px}
+.opt{border:3px solid #000;border-radius:16px;padding:16px 14px;font-weight:800;font-size:1.12rem;text-align:left;box-shadow:5px 5px 0 #000;display:flex;gap:10px;align-items:center;color:#120a04;min-height:70px}
+.opt .ic{font-size:1.5rem}
+.c0{background:var(--pumpkin)}.c1{background:#b18cff}.c2{background:var(--slime)}.c3{background:var(--ghost)}.c4{background:var(--candy);color:#fff}
+.opt.dim{opacity:.35}.opt.right{outline:5px solid var(--good);outline-offset:3px}.opt.mine{outline:5px dashed var(--bone);outline-offset:3px}
+.opt[disabled]{cursor:default}
+.count{font-family:var(--f-display);font-size:1.1rem}
+
+/* reveal */
+.bars{display:grid;gap:8px}
+.bar{display:grid;grid-template-columns:minmax(0,14em) 1fr 3em;gap:10px;align-items:center;font-weight:600}
+.bar .lab{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar .track{height:22px;border:2px solid var(--bone);border-radius:8px;background:var(--night);overflow:hidden}
+.bar .fill{height:100%;background:var(--muted)}.bar.ok .fill{background:var(--good)}
+.bar .num{text-align:right;font-variant-numeric:tabular-nums}
+.lore{border:var(--b);border-radius:14px;padding:14px;background:#2a1a12;display:grid;gap:6px}
+.lore b{color:var(--pumpkin);font-family:var(--f-display);font-weight:400}
+.ask{border:2px dashed var(--slime);border-radius:14px;padding:12px 14px;color:var(--slime);font-weight:600}
+.ask::before{content:"Ask the room 🕯️";display:block;font-size:.75rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+
+/* leaderboard */
+.board{list-style:none;margin:0;padding:0;display:grid;gap:8px;counter-reset:r}
+.board li{counter-increment:r;display:grid;grid-template-columns:2.4em minmax(0,1fr) auto auto;gap:12px;align-items:center;border:var(--b);border-radius:12px;background:var(--panel-2);padding:10px 14px;font-weight:800;font-size:1.1rem}
+.board li::before{content:counter(r);font-family:var(--f-display);font-weight:400;font-size:1.2rem;color:var(--pumpkin)}
+.board li:nth-child(1){background:#3b2410;border-color:var(--pumpkin)}
+.board li.me{outline:3px solid var(--slime);outline-offset:2px}
+.board .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.board .d{color:var(--slime);font-size:.9rem;font-variant-numeric:tabular-nums}
+.board .s{font-variant-numeric:tabular-nums}
+.podium{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;align-items:end;text-align:center}
+.podium div{border:var(--b);border-radius:14px 14px 0 0;background:var(--panel-2);padding:12px 8px;display:grid;gap:4px;min-width:0}
+.podium .p1{min-height:190px;background:#3b2410;border-color:var(--pumpkin)}.podium .p2{min-height:150px}.podium .p3{min-height:120px}
+.podium b{font-family:var(--f-display);font-weight:400;font-size:1.6rem}
+.podium span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:800}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chips span{border:2px solid var(--bone);border-radius:999px;padding:4px 12px;font-weight:600;background:var(--panel-2)}
+.big{font-family:var(--f-display);font-size:clamp(2.6rem,12vw,5rem);line-height:1}
+.verdict{font-family:var(--f-drip);font-size:clamp(2.2rem,9vw,4rem);line-height:1}
+.verdict.ok{color:var(--slime)}.verdict.no{color:var(--blood)}
+.float{position:fixed;left:50%;top:40%;transform:translate(-50%,-50%);font-family:var(--f-display);font-size:2rem;pointer-events:none;z-index:20;text-shadow:3px 3px 0 #000}
+@media (max-width:560px){.bar{grid-template-columns:minmax(0,8em) 1fr 2.4em}.podium b{font-size:1.2rem}}
+
+/* ===== live events ===== */
+.candy-pop{position:fixed;z-index:30;font-size:2.6rem;border:none;background:radial-gradient(circle,rgba(255,207,92,.45),transparent 70%);border-radius:50%;width:76px;height:76px;display:grid;place-items:center;cursor:pointer;filter:drop-shadow(2px 3px 0 #000)}
+@media (prefers-reduced-motion:no-preference){.candy-pop{animation:bob 1s ease-in-out infinite}@keyframes bob{50%{transform:translateY(-8px) rotate(8deg)}}}
+.ghost-attack{position:fixed;z-index:40;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,440px);background:#0b0612;border:4px solid var(--bone);border-radius:22px;box-shadow:0 0 0 9999px rgba(5,2,10,.55),8px 8px 0 var(--candy);padding:16px;display:grid;gap:10px;text-align:center}
+.ghost-attack .gsvg{width:110px;margin:0 auto}
+@media (prefers-reduced-motion:no-preference){.ghost-attack .gsvg{animation:wob 1.2s ease-in-out infinite}@keyframes wob{50%{transform:translateY(-8px) rotate(-4deg)}}}
+.ghost-attack h3{color:var(--candy)}
+.gt{height:10px;border:2px solid var(--bone);border-radius:999px;overflow:hidden}.gt i{display:block;height:100%;background:var(--candy);transform-origin:left}
+.spell{display:flex;justify-content:center;gap:6px;flex-wrap:wrap}
+.spell span{width:38px;height:46px;border:3px solid var(--bone);border-radius:10px;display:grid;place-items:center;font-family:var(--f-mono);font-weight:700;font-size:1.3rem;background:var(--panel-2)}
+.spell span.done{background:var(--slime);color:#0b1402;border-color:#000}
+.keys{display:flex;justify-content:center;gap:6px;flex-wrap:wrap}
+.keys button{width:44px;height:44px;border:3px solid #000;border-radius:10px;background:var(--pumpkin);color:#140a02;font-family:var(--f-mono);font-weight:700;font-size:1.2rem;box-shadow:3px 3px 0 #000}
+.keys button:active{transform:translate(2px,2px);box-shadow:1px 1px 0 #000}
+.scare{position:fixed;inset:0;z-index:60;background:#000;display:grid;place-items:center;pointer-events:none}
+.scare svg{width:min(80vw,520px)}
+.scare b{position:absolute;bottom:12%;font-family:var(--f-drip);font-size:clamp(4rem,20vw,10rem);color:#fff;text-shadow:6px 6px 0 var(--blood)}
+@media (prefers-reduced-motion:no-preference){.scare svg{animation:lunge .9s ease-out}@keyframes lunge{from{transform:scale(.2) rotate(-10deg);opacity:0}30%{opacity:1}to{transform:scale(1.15)}}}
+
+/* ===== doors ===== */
+.doors{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,96px),1fr));gap:10px}
+.door{aspect-ratio:3/4;max-width:100%;border:3px solid #000;border-radius:40px 40px 8px 8px;background:linear-gradient(#6b3c1e,#4a2812);box-shadow:4px 4px 0 #000;display:grid;place-items:center;font-size:2rem;color:var(--bone);position:relative}
+.door::after{content:"";position:absolute;right:16%;top:55%;width:9px;height:9px;border-radius:50%;background:var(--tn)}
+.door.open{background:var(--panel-2);font-size:1rem;font-weight:800;text-align:center;padding:6px;line-height:1.2}
+.door.open::after{display:none}
+.door.open .em{display:block;font-size:2rem}
+
+/* ===== host live table ===== */
+.live{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.live th,.live td{text-align:left;padding:6px 8px;border-bottom:1px solid rgba(251,243,228,.15);white-space:nowrap}
+.live th{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.live td.t{max-width:12em;overflow:hidden;text-overflow:ellipsis}
+.tablebox{overflow-x:auto;border:var(--b);border-radius:14px;background:var(--panel-2);padding:6px 8px}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:14px}
+.two>*{min-width:0}
+
+/* ===== crypt + boss ===== */
+.crown{display:grid;justify-items:center;gap:6px;text-align:center;padding:10px;border:3px dashed var(--tn);border-radius:20px;background:radial-gradient(circle at 50% 30%,rgba(255,207,92,.25),transparent 70%)}
+.crown .c{font-size:4.4rem;line-height:1;filter:drop-shadow(0 0 18px rgba(255,207,92,.7))}
+@media (prefers-reduced-motion:no-preference){.crown .c{animation:glow 1.6s ease-in-out infinite}@keyframes glow{50%{transform:scale(1.08) rotate(-4deg)}}}
+.crown b{font-family:var(--f-display);font-weight:400;color:var(--tn);font-size:1.3rem}
+textarea.codein{width:100%;min-height:210px;resize:vertical;background:var(--code);color:var(--bone);border:var(--b);border-radius:12px;padding:12px;font-family:var(--f-mono);font-size:.92rem;line-height:1.55;tab-size:4}
+.fb{border:var(--b);border-radius:12px;padding:10px 14px;font-weight:600}
+.fb.ok{background:#12371f;border-color:var(--good)}.fb.no{background:#3a1218;border-color:var(--blood)}
+.hp{height:30px;border:var(--b);border-radius:999px;background:var(--night);overflow:hidden;position:relative}
+.hp i{display:block;height:100%;background:linear-gradient(90deg,var(--blood),var(--candy));transform-origin:left;transition:transform .4s ease}
+.hp span{position:absolute;inset:0;display:grid;place-items:center;font-weight:800;text-shadow:1px 1px 0 #000}
+.bigghost{width:min(70vw,300px);margin:0 auto;display:block}
+@media (prefers-reduced-motion:no-preference){.bigghost{animation:wob 1.6s ease-in-out infinite}.bigghost.hit{animation:hit .25s}@keyframes hit{50%{transform:translateX(8px) scale(.96);filter:brightness(2)}}}
+.progress{display:flex;align-items:center;gap:8px;font-weight:800}
+.progress .track{flex:1;height:10px;border:2px solid var(--bone);border-radius:999px;overflow:hidden;min-width:80px}
+.progress .track i{display:block;height:100%;background:var(--pumpkin)}
+
+.arena{position:relative;height:min(62vh,440px);border:var(--b);border-radius:18px;overflow:hidden;background:radial-gradient(circle at 50% 40%,#3a1f5c,#0b0612 75%);touch-action:none;
+  cursor:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 40 40'%3E%3Cpath d='M4 4l22 22' stroke='%23e8e8f0' stroke-width='5' stroke-linecap='round'/%3E%3Cpath d='M24 30l6-6M27 33l6-6' stroke='%23ff7a1a' stroke-width='5' stroke-linecap='round'/%3E%3Cpath d='M31 31l5 5' stroke='%23ffcf5c' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E") 4 4,crosshair}
+.bossg{position:absolute;left:50%;top:52%;width:240px;transform:translate(-50%,-50%) scale(.35);transform-origin:center;user-select:none;-webkit-user-select:none}
+.bossg svg{display:block;width:100%;pointer-events:none}
+@media (prefers-reduced-motion:no-preference){.bossg-in{animation:wob 1.4s ease-in-out infinite}.bossg.hit .bossg-in{animation:hit .22s}}
+.arena.bitten{box-shadow:inset 0 0 0 9999px rgba(255,75,75,.35)}
+.slash{position:fixed;z-index:50;width:130px;height:7px;margin:-3px 0 0 -65px;border-radius:6px;background:linear-gradient(90deg,transparent,#fff,var(--ghost),transparent);transform:rotate(var(--r)) scaleX(1);pointer-events:none}
+@media (prefers-reduced-motion:no-preference){.slash{animation:sl .32s ease-out forwards}@keyframes sl{from{transform:rotate(var(--r)) scaleX(.1);opacity:1}to{transform:rotate(var(--r)) scaleX(1.15);opacity:0}}
+  .dmgpop{animation:dp .7s ease-out forwards}@keyframes dp{to{transform:translate(-50%,-60px);opacity:0}}}
+.dmgpop{position:fixed;z-index:51;transform:translate(-50%,-20px);font-family:var(--f-display);font-size:1.5rem;color:var(--candy);text-shadow:2px 2px 0 #000;pointer-events:none}
+</style>
+</head><body>
+
+
+<div class="sky" aria-hidden="true">
+  <div class="moon"></div>
+  <svg class="bat" viewBox="0 0 40 16"><path d="M0 9 Q6 0 12 7 Q15 3 18 6 L20 3 L22 6 Q25 3 28 7 Q34 0 40 9 Q32 7 28 13 Q24 9 20 12 Q16 9 12 13 Q8 7 0 9Z"/></svg>
+  <svg class="bat" viewBox="0 0 40 16"><path d="M0 9 Q6 0 12 7 Q15 3 18 6 L20 3 L22 6 Q25 3 28 7 Q34 0 40 9 Q32 7 28 13 Q24 9 20 12 Q16 9 12 13 Q8 7 0 9Z"/></svg>
+  <svg class="bat" viewBox="0 0 40 16"><path d="M0 9 Q6 0 12 7 Q15 3 18 6 L20 3 L22 6 Q25 3 28 7 Q34 0 40 9 Q32 7 28 13 Q24 9 20 12 Q16 9 12 13 Q8 7 0 9Z"/></svg>
+  <svg class="bat" viewBox="0 0 40 16"><path d="M0 9 Q6 0 12 7 Q15 3 18 6 L20 3 L22 6 Q25 3 28 7 Q34 0 40 9 Q32 7 28 13 Q24 9 20 12 Q16 9 12 13 Q8 7 0 9Z"/></svg>
+</div>
+
+<div class="hud"><div class="wrap">
+  <div class="logo">The Haunted JVM ☕</div>
+  <span class="pill" id="hudRole" hidden></span>
+  <span class="pill o" id="hudScore" hidden></span>
+  <span class="pill" id="hudCandy" hidden></span>
+  <span class="pill t" id="hudTime" hidden></span>
+</div></div>
+
+<main class="wrap"><div class="stage" id="stage"></div></main>
+
+<script>
+/* Standalone runtime: provides window.claude.use('db'|'room'|'user'|'sample')
+   on top of this app's own WebSocket server, so the game code is unchanged. */
+(function () {
+  const params = new URLSearchParams(location.search);
+  let hostKey = null;
+  try {
+    if (params.has('host')) { sessionStorage.setItem('hj:host', params.get('host')); params.delete('host');
+      history.replaceState(null, '', location.pathname + (params.toString() ? '?' + params : '') + location.hash); }
+    hostKey = sessionStorage.getItem('hj:host');
+  } catch (e) { hostKey = params.get('host'); }
+  const store = { get(k) { try { return localStorage.getItem(k) } catch (e) { return null } }, set(k, v) { try { localStorage.setItem(k, v) } catch (e) {} } };
+
+  let ws = null, me = null, rid = 0, sid = 0, backoff = 500;
+  const pending = new Map(), subs = new Map(), roomL = {};
+  let resolveReady; const ready = new Promise(r => (resolveReady = r));
+  const status = (on) => { document.documentElement.dataset.conn = on ? 'up' : 'down'; };
+
+  function connect() {
+    ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+    ws.onopen = () => { backoff = 500; ws.send(JSON.stringify({ t: 'hello', token: store.get('hj:token'), hostKey })); };
+    ws.onmessage = ev => {
+      let m; try { m = JSON.parse(ev.data) } catch (e) { return }
+      if (m.t === 'welcome') {
+        me = m; store.set('hj:token', m.token); status(true); resolveReady(true);
+        for (const s of subs.values()) send({ t: 'sub', sid: s.sid, kind: s.kind, path: s.path, where: s.where });
+      } else if (m.t === 'res') {
+        const p = pending.get(m.rid); if (!p) return; pending.delete(m.rid);
+        m.ok ? p.ok(m) : p.fail({ code: m.code || 'denied' });
+      } else if (m.t === 'snap') {
+        const s = subs.get(m.sid); if (!s) return;
+        if (m.doc) s.cb({ id: m.doc.id, exists: m.doc.exists, data: () => m.doc.data || undefined, metadata: {} });
+        else s.cb({ docs: m.docs.map(d => ({ id: d.id, exists: true, data: () => d.data, metadata: {} })), size: m.docs.length, empty: !m.docs.length, docChanges: () => [], metadata: {} });
+      } else if (m.t === 'room') { (roomL[m.topic] || []).forEach(f => { try { f(m.data) } catch (e) {} }); }
+    };
+    ws.onclose = () => {
+      status(false);
+      for (const p of pending.values()) p.fail({ code: 'unavailable' }); pending.clear();
+      setTimeout(connect, backoff); backoff = Math.min(8000, backoff * 2);
+    };
+  }
+  function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
+  function req(m) {
+    return ready.then(() => new Promise((ok, fail) => {
+      if (!ws || ws.readyState !== 1) return fail({ code: 'unavailable' });
+      const id = ++rid; pending.set(id, { ok, fail }); send({ ...m, rid: id });
+      setTimeout(() => { if (pending.has(id)) { pending.delete(id); fail({ code: 'unavailable' }) } }, 10000);
+    }));
+  }
+  function subscribe(kind, path, where, cb) {
+    const s = { sid: ++sid, kind, path, where, cb }; subs.set(s.sid, s);
+    ready.then(() => send({ t: 'sub', sid: s.sid, kind, path, where }));
+    return () => { subs.delete(s.sid); send({ t: 'unsub', sid: s.sid }); };
+  }
+  const docRef = path => ({
+    id: path.split('/')[1], path,
+    get: () => req({ t: 'get', path }).then(r => ({ id: path.split('/')[1], exists: r.doc.exists, data: () => r.doc.data || undefined, metadata: {} })),
+    set: data => req({ t: 'set', path, data }).then(() => {}),
+    update: data => req({ t: 'update', path, data }).then(() => {}),
+    delete: () => req({ t: 'delete', path }).then(() => {}),
+    onSnapshot: (next, err) => subscribe('doc', path, [], next),
+  });
+  const query = (col, where) => ({
+    path: col,
+    where: (f, op, v) => query(col, where.concat([[f, op, v]])),
+    orderBy() { return this }, limit() { return this },
+    doc: id => docRef(col + '/' + id),
+    onSnapshot: (next, err) => subscribe('col', col, where, next),
+  });
+  const db = { doc: docRef, collection: col => query(col, []) };
+  const room = { emit: (topic, data) => send({ t: 'emit', topic, data }), on: (topic, fn) => { (roomL[topic] = roomL[topic] || []).push(fn) } };
+  const user = { id: async () => me && me.id, canEdit: async () => !!(me && me.isHost), isOwner: async () => !!(me && me.isHost) };
+  const sample = {
+    json: async (prompt, opts) => {
+      const r = await fetch('/api/grade', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: me && me.token, code: opts && opts.code }) });
+      if (!r.ok) throw { code: 'unavailable' };
+      return r.json();
+    }
+  };
+  window.claude = {
+    use: async name => {
+      const ok = await Promise.race([ready, new Promise(r => setTimeout(() => r(false), 8000))]);
+      if (!ok) return null;
+      if (name === 'db') return db; if (name === 'room') return room; if (name === 'user') return user;
+      if (name === 'sample') return me && me.grading ? sample : null;
+      return null;
+    }
+  };
+  connect();
+})();
+
+</script>
+<script>
+(function(){
+const TOT = ["Treat · ship it", "Trick · red flag"];
+const QS = [
+ // Round 1: Trick or Treat
+ {r:"Trick or Treat?", tag:"Day 1 · money", prompt:"Storing money like this: treat or trick?", code:'double total = 0.1 + 0.2;', opts:TOT, a:1,
+  lore:"Trick. You get 0.30000000000000004. Doubles can't hold cents exactly. Use BigDecimal built from a String: new BigDecimal(\"0.10\").",
+  ask:"Where else would a tiny rounding error turn into a real bug? (Interest, tax, splitting a bill…)"},
+ {r:"Trick or Treat?", tag:"Day 1 · encapsulation", prompt:"A getter on your Basket class:", code:'public List<Item> items() {\n    return items;\n}', opts:TOT, a:1,
+  lore:"Trick. It hands out the real list, so anyone can .clear() it and skip your validation. Return List.copyOf(items).",
+  ask:"What could a caller break if they get the real list?"},
+ {r:"Trick or Treat?", tag:"Day 2 · Optional", prompt:"A lookup that might find nothing:", code:'Optional<Order> findById(String id)', opts:TOT, a:0,
+  lore:"Treat. The \"might be missing\" case is right there in the type, so callers must handle it. No surprise nulls.",
+  ask:"What would go wrong if this just returned null instead?"},
+ // Round 2: Possessed line
+ {r:"Possessed Line 👻", tag:"Day 3 · factory", prompt:"Which line will haunt you later?", lines:true,
+  code:'static ShippingStrategy forCode(String code) {\n    return switch (code) {\n        case "STD" -> new StandardShipping();\n        case "EXP" -> new ExpressShipping();\n        default    -> null;\n    };\n}', a:4,
+  lore:"Returning null makes the program crash somewhere else later (a NullPointerException). Throw an IllegalArgumentException with the bad code instead.",
+  ask:"Why is failing early, right here, better than failing later?"},
+ {r:"Possessed Line 👻", tag:"Day 5 · stock", prompt:"5 in stock, a customer reserves all 5. Which line wrongly says no?", lines:true,
+  code:'public int reserve(String id, int qty) {\n    int available = inventory.availableStock(id);\n    if (qty >= available) throw new InsufficientStockException(id);\n    inventory.updateStock(id, available - qty);\n    return available - qty;\n}', a:2,
+  lore:">= rejects buying the last units. It should be >. Only a \"reserve 5 of 5\" test catches this.",
+  ask:"Which test case would you write to catch this?"},
+ // Round 3: Cauldron sort
+ {r:"Cauldron Sort 🧪", tag:"Day 3 · patterns", prompt:"Swap the discount rule at runtime without if/else chains.", opts:["Strategy","Singleton","Builder"], a:0,
+  lore:"Strategy: one interface, one class per rule, and you swap them in. The Day 1 discount policies did exactly this.",
+  ask:"How would you add a new discount without editing the Basket?"},
+ {r:"Cauldron Sort 🧪", tag:"Day 5 · Mockito", prompt:"In a unit test, the stock system (Inventory) is…", opts:["Mock it","Keep it real"], a:0,
+  lore:"Mock it. It's an external boundary: slow, shared and unpredictable. Keep value types like BigDecimal real.",
+  ask:"What does verifyNoInteractions(inventory) prove?"},
+];
+
+const TIME = 30, TREAT_TIME = 30, GHOST_TIME = 9;
+const ICONS = ["🎃","👻","🦇","🕷️","🧪"];
+const WORDS = ["final","static","throw","record","switch","catch","super","class","enum","void","import","while"];
+const optsOf = q => q.lines ? q.code.split('\n').map((l,i)=>({i,l})).filter(x=>x.l.trim()).map(x=>'Line '+(x.i+1)) : q.opts;
+const lineIdx = q => q.code.split('\n').map((l,i)=>({i,l})).filter(x=>x.l.trim()).map(x=>x.i);
+const correctOpt = q => q.lines ? lineIdx(q).indexOf(q.a) : q.a;
+const CRYPT = {
+  title:"lineTotal()",
+  spec:["Return price × qty, rounded to 2 decimal places using HALF_UP.","Throw IllegalArgumentException if price is null or qty is negative.","Money stays BigDecimal the whole way. No double, no float."],
+  starter:"static BigDecimal lineTotal(BigDecimal price, int qty) {\n    // your spell here\n\n}\n"
+};
+
+/* ---------------- helpers ---------------- */
+const $=id=>document.getElementById(id);
+const stage=$('stage');
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const KW=new Set('public private protected final class static new return if else throw throws try catch void int boolean synchronized enum record null true false this instanceof extends implements interface var for while default case switch'.split(' '));
+function hl(src){const re=/(\/\/.*$)|("(?:[^"\\]|\\.)*")|(@\w+)|([A-Za-z_]\w*)|(\d+(?:\.\d+)?)/g;let o='',l=0,m;
+  while((m=re.exec(src))){o+=esc(src.slice(l,m.index));
+    if(m[1])o+='<span class="tc">'+esc(m[1])+'</span>';else if(m[2])o+='<span class="ts">'+esc(m[2])+'</span>';
+    else if(m[3])o+='<span class="tk">'+m[3]+'</span>';else if(m[4])o+=KW.has(m[4])?'<span class="tk">'+m[4]+'</span>':(/^[A-Z]/.test(m[4])?'<span class="tt">'+m[4]+'</span>':m[4]);
+    else o+='<span class="tn">'+m[5]+'</span>';l=re.lastIndex;}return o+esc(src.slice(l));}
+const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const ls={get(k,d){try{const v=localStorage.getItem('haf:'+k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem('haf:'+k,JSON.stringify(v))}catch(e){}}};
+function floatText(t,c){const d=document.createElement('div');d.className='float';d.textContent=t;d.style.color=c;document.body.appendChild(d);setTimeout(()=>d.remove(),1100)}
+const pick=a=>a[Math.floor(Math.random()*a.length)];
+const rnd=(a,b)=>a+Math.random()*(b-a);
+const shuffle=a=>{a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a};
+const WIN=["ate 🔥","no cap 🎃","slay 👻","compiled ☕","clean 🦇"],LOSE=["cooked 💀","tricked 🎃","NullPointer 💀","segfault vibes 🦇"];
+const GHOST_SVG='<svg viewBox="0 0 120 130" aria-hidden="true"><path d="M60 6C30 6 14 30 14 60v62l13-12 11 12 11-12 11 12 11-12 11 12 11-12 13 12V60C106 30 90 6 60 6z" fill="#f4f0ff" stroke="#000" stroke-width="5"/><ellipse cx="44" cy="56" rx="9" ry="13" fill="#130c1f"/><ellipse cx="76" cy="56" rx="9" ry="13" fill="#130c1f"/><ellipse cx="60" cy="88" rx="11" ry="14" fill="#130c1f"/></svg>';
+const BIG_GHOST_SVG='<svg viewBox="0 0 200 210" aria-hidden="true"><path d="M100 8C50 8 22 46 22 96v100l20-18 18 18 20-18 20 18 20-18 20 18 18-18 20 18V96C178 46 150 8 100 8z" fill="#efe9ff" stroke="#000" stroke-width="7"/><path d="M60 78l24 10M140 78l-24 10" stroke="#000" stroke-width="7" stroke-linecap="round"/><ellipse cx="72" cy="104" rx="14" ry="18" fill="#ff4b4b"/><ellipse cx="128" cy="104" rx="14" ry="18" fill="#ff4b4b"/><path d="M62 148q38-26 76 0q-38 14-76 0z" fill="#130c1f"/><path d="M78 146l6 10 6-11 6 11 6-11 6 11 6-10" fill="#fff"/></svg>';
+
+/* ---------------- spell (multi-key banish) ---------------- */
+let activeSpell=null;
+function makeSpell(box,word,onDone){
+  let pos=0;const letters=word.toUpperCase().split('');
+  const decoys=shuffle('QXZJKVWY'.split('')).slice(0,Math.min(3,Math.max(2,8-letters.length)));
+  const keys=shuffle(letters.concat(decoys));
+  box.innerHTML=`<div class="spell">${letters.map(l=>`<span>${l}</span>`).join('')}</div><div class="keys">${keys.map(k=>`<button type="button" data-k="${k}">${k}</button>`).join('')}</div>`;
+  const spans=box.querySelectorAll('.spell span');
+  function press(k){
+    if(pos>=letters.length)return;
+    if(k===letters[pos]){spans[pos].classList.add('done');pos++;if(pos===letters.length){cancel();onDone()}}
+    else{box.classList.remove('shake');void box.offsetWidth;box.classList.add('shake')}
+  }
+  box.querySelectorAll('.keys button').forEach(b=>b.onclick=()=>press(b.dataset.k));
+  const onKey=e=>{if(e.target&&e.target.tagName==='TEXTAREA')return;if(/^[a-z]$/i.test(e.key)){e.preventDefault();press(e.key.toUpperCase())}};
+  document.addEventListener('keydown',onKey);
+  const sp={cancel:()=>cancel()};
+  function cancel(){document.removeEventListener('keydown',onKey);if(activeSpell===sp)activeSpell=null}
+  activeSpell=sp;return sp;
+}
+
+/* ---------------- platform ---------------- */
+let db=null,room=null,user=null,sample=null,myId=null,canHost=false,ready=false;
+let G={session:null,phase:'idle',q:-1,startedAt:null,bossHp:0,victory:false};
+let mode='landing',players=[],unsubPlayers=null,playersSession=null,hall=[];
+async function boot(){
+  try{
+    if(window.claude&&typeof window.claude.use==='function'){
+      [db,room,user,sample]=await Promise.all(['db','room','user','sample'].map(n=>window.claude.use(n).catch(()=>null)));
+      if(user){myId=await user.id();canHost=await user.canEdit()}
+    }
+  }catch(e){}
+  ready=true;
+  if(db){
+    db.doc('game/current').onSnapshot(s=>{if(s.exists)applyGame(s.data());else render()},()=>render());
+    db.collection('hall').onSnapshot(s=>{hall=s.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>String(b.at).localeCompare(String(a.at)));if(mode==='landing')render()},()=>{});
+  }
+  if(room){try{room.on('sync',d=>{if(d&&typeof d==='object')applyGame(d)})}catch(e){}}
+  if(!myId)myId=ls.get('localId',null)||('local_'+Math.random().toString(36).slice(2));ls.set('localId',myId);
+  render();
+}
+function applyGame(d){
+  G={session:d.session||null,phase:d.phase||'idle',q:Number.isInteger(d.q)?d.q:-1,startedAt:d.startedAt||null,bossHp:Number(d.bossHp)||0,victory:!!d.victory};
+  if(G.session!==playersSession)subscribePlayers();
+  if(mode==='player')onPlayerGame();
+  render();
+}
+function subscribePlayers(){
+  if(unsubPlayers){try{unsubPlayers()}catch(e){}unsubPlayers=null}
+  players=[];playersSession=G.session;
+  if(!db||!G.session)return;
+  unsubPlayers=db.collection('players').where('session','==',G.session).onSnapshot(s=>{players=s.docs.map(d=>({id:d.id,...d.data()}));render()},()=>{});
+}
+function mount(key,build,update){
+  if(stage.dataset.k!==key){stage.dataset.k=key;stage.innerHTML=build();}
+  if(update)update();
+}
+
+/* ---------------- scoring ---------------- */
+function rowsFor(list,upTo){
+  const passers=list.filter(p=>p.crypt&&p.crypt.passed).sort((a,b)=>String(a.crypt.at).localeCompare(String(b.crypt.at)));
+  const firstId=passers[0]&&passers[0].id;
+  return list.map(p=>{
+    let quiz=0,streak=0,last=0,lastOk=null;
+    for(let k=0;k<=upTo&&k<QS.length;k++){
+      const a=(p.answers||{})[k];const ok=a&&a.c===correctOpt(QS[k]);let g=0;
+      if(ok){streak++;g=500+Math.round(500*Math.max(0,1-(Number(a.ms)||TIME*1000)/(TIME*1000)))+Math.min(300,(streak-1)*100)}else streak=0;
+      quiz+=g;if(k===upTo){last=g;lastOk=a?ok:null}
+    }
+    const hits=Number(p.ghostHits)||0,passed=!!(p.crypt&&p.crypt.passed);
+    const bonus=(passed?2000:0)+(p.id===firstId?1000:0);
+    return {id:p.id,tag:p.tag||'anon',quiz,streak,last,lastOk,aura:Math.max(0,quiz-250*hits+bonus),
+      candies:Number(p.candies)||0,kills:Number(p.ghostKills)||0,hits,passed,crown:p.id===firstId,cryptAt:p.crypt&&p.crypt.at,tries:(p.crypt&&p.crypt.tries)||0,
+      bossDmg:Number(p.bossDmg)||0,answered:!!(p.answers||{})[G.q]};
+  }).sort((a,b)=>b.aura-a.aura||a.tag.localeCompare(b.tag));
+}
+const scoredUpTo=()=>G.phase==='question'?G.q-1:G.q;
+const totalDmg=()=>players.reduce((s,p)=>s+(Number(p.bossDmg)||0),0);
+
+/* ---------------- HUD ---------------- */
+let clock=null,clockEnd=0,clockTotal=TIME;
+function runClock(sec,onEnd){stopClock();clockTotal=sec;const el=$('hudTime');el.hidden=false;clockEnd=Date.now()+sec*1000;
+  const tick=()=>{const left=Math.max(0,Math.ceil((clockEnd-Date.now())/1000));el.textContent=left+'s';el.classList.toggle('low',left<=10);
+    const bar=$('tbar');if(bar)bar.style.transform='scaleX('+Math.max(0,(clockEnd-Date.now())/(sec*1000))+')';
+    if(left<=0){clearInterval(clock);clock=null;onEnd&&onEnd()}};tick();clock=setInterval(tick,250)}
+function stopClock(hide=true){clearInterval(clock);clock=null;if(hide)$('hudTime').hidden=true}
+function setHud(role,aura,candies){$('hudRole').hidden=!role;$('hudRole').textContent=role||'';
+  $('hudScore').hidden=aura==null;if(aura!=null)$('hudScore').textContent=aura.toLocaleString()+' bytes';
+  $('hudCandy').hidden=candies==null;if(candies!=null)$('hudCandy').textContent='🍬 '+candies}
+
+/* ---------------- router ---------------- */
+function render(){
+  if(!ready){stage.innerHTML='<p class="sub">Summoning the game…</p>';return}
+  if(mode==='host')return renderHost();
+  if(mode==='player')return renderPlayer();
+  renderLanding();
+}
+
+/* ---------------- landing ---------------- */
+function renderLanding(){
+  stopClock(false);setHud(null,null,null);
+  const live=G.session&&!['idle','end'].includes(G.phase);
+  const note=!db?'Can\u2019t reach the game server. Check your connection and refresh.':live?'A game is running. Join and you’ll jump in.':'Waiting for the host. Join now and you’ll land in the lobby.';
+  mount('landing',()=>`
+   <div class="row"><span class="sticker st-o">Week 1 recap</span><span class="sticker st-g">live party game</span></div>
+   <h1>The Haunted<br>JVM</h1>
+   <p class="sub">${QS.length} quick questions on your own device, 30 seconds each. Grab candy, fight off ghosts, and stay for the finale.</p>
+   <div class="card"><h3>Join the game</h3>
+     <div class="row"><input class="input" id="tag" maxlength="16" placeholder="your spooky gamer tag" value="${esc(ls.get('tag',''))}" aria-label="Gamer tag"><button class="btn g" id="join">Join 🎃</button></div>
+     <p class="note" id="joinNote"></p></div>
+   <div id="hallBox" hidden></div>
+   <div id="hostBox"></div>`,()=>{
+    $('joinNote').textContent=note;
+    const j=$('join');j.onclick=joinGame;$('tag').onkeydown=e=>{if(e.key==='Enter')joinGame()};j.disabled=!db;
+    $('hallBox').hidden=!hall.length;$('hallBox').innerHTML=hall.length?'<h3 style="margin-bottom:8px">Hall of Fame 🏆</h3><ol class="board" id="hallList"></ol>':'';
+    const hl2=$('hallList');if(hl2)hall.slice(0,5).forEach(h=>{const li=document.createElement('li');const t=document.createElement('span');t.className='t';t.textContent='👑 '+(h.crown||'nobody')+(h.candyKing?' · 🍬 '+h.candyKing:'');const d=document.createElement('span');d.className='d';d.textContent=h.victory?'ghost slain':'';const s=document.createElement('span');s.className='s';s.textContent=String(h.at||'').slice(0,10);li.append(t,d,s);hl2.appendChild(li)});
+    $('hostBox').innerHTML=(canHost||!db)?`<div class="card"><h3>Hosting?</h3><p class="note">${db?'You opened the host link, so you can run the game on the projector.':'No shared data here, so host mode runs locally (rehearsal only).'}</p><div class="row"><button class="btn" id="host">Host on the big screen</button></div></div>`:'';
+    const h=$('host');if(h)h.onclick=()=>{mode='host';render()};
+  });
+}
+
+/* ================= HOST ================= */
+let writeChain=Promise.resolve();
+function hostSet(next){
+  const st={session:G.session,phase:G.phase,q:G.q,startedAt:G.startedAt,bossHp:G.bossHp,victory:G.victory,...next};
+  applyGame(st);
+  if(room){try{room.emit('sync',st)}catch(e){}}
+  if(db)writeChain=writeChain.then(()=>db.doc('game/current').set(st)).catch(()=>{const n=$('hostErr');if(n)n.textContent='Couldn’t save the game state; players may not update.'});
+}
+const now=()=>new Date().toISOString();
+function newSession(){hallWritten=null;hostSet({session:'s'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),phase:'lobby',q:-1,startedAt:null,bossHp:0,victory:false})}
+function startQ(i){hostSet({phase:'question',q:i,startedAt:now()})}
+const nextAfter=()=>G.q+1<QS.length?()=>startQ(G.q+1):()=>hostSet({phase:'crypt',startedAt:now()});
+const nextLabel=()=>G.q+1<QS.length?'Next question →':'Open the Crypt Gate 🏰';
+function hostNav(){return `<div class="row"><button class="btn g" id="nxt">${nextLabel()}</button><button class="btn b" id="brd">Leaderboard</button><button class="btn p" id="trt">🍬 Trick-or-treat break</button><button class="btn q" id="endg">End game</button></div><p class="note" id="hostErr"></p>`}
+function bindNav(){const n=$('nxt');if(n)n.onclick=nextAfter();const b=$('brd');if(b)b.onclick=()=>hostSet({phase:'board'});
+  const t=$('trt');if(t)t.onclick=()=>hostSet({phase:'treats',startedAt:now()});const e=$('endg');if(e)e.onclick=()=>hostSet({phase:'end'})}
+
+function renderHost(){
+  setHud('🎙️ host',null,null);
+  if(!G.session||G.phase==='idle')return hostIdle();
+  ({lobby:hostLobby,question:hostQuestion,reveal:hostReveal,board:hostBoard,treats:hostTreats,crypt:hostCrypt,boss:hostBoss,end:hostEnd}[G.phase]||hostIdle)();
+}
+function hostIdle(){stopClock();
+  mount('h-idle',()=>`<span class="sticker st-o">host controls</span><h2>Open the crypt</h2><p class="sub">Start a fresh game. Nothing moves until you click, so take as long as you like to discuss each answer.</p>
+   <div class="row"><button class="btn" id="open">New game</button><button class="btn q" id="back">Back</button></div><p class="note" id="hostErr"></p>`,
+   ()=>{$('open').onclick=newSession;$('back').onclick=()=>{mode='landing';render()}});}
+function liveTable(rows,cols){
+  if(!rows.length)return '<p class="sub">No players yet.</p>';
+  const head={ans:'',tag:'Player',aura:'Bytes',candy:'🍬',kills:'👻 banished',hits:'💀 eaten',crypt:'🏰',dmg:'⚔️ dmg'};
+  return `<div class="tablebox"><table class="live"><thead><tr>${cols.map(c=>`<th>${head[c]}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${cols.map(c=>{
+    if(c==='ans')return `<td>${r.answered?'✅':'⏳'}</td>`;if(c==='tag')return `<td class="t" data-tag="${esc(r.id)}"></td>`;
+    if(c==='aura')return `<td>${r.aura.toLocaleString()}</td>`;if(c==='candy')return `<td>${r.candies}</td>`;if(c==='kills')return `<td>${r.kills}</td>`;
+    if(c==='hits')return `<td>${r.hits}</td>`;if(c==='crypt')return `<td>${r.crown?'👑':r.passed?'🔓':r.tries?'⌛ '+r.tries:'·'}</td>`;if(c==='dmg')return `<td>${r.bossDmg}</td>`;return '<td></td>'}).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
+function fillTags(rows,root){(root||stage).querySelectorAll('[data-tag]').forEach(el=>{const r=rows.find(x=>x.id===el.dataset.tag);el.textContent=(r?r.tag:'anon')+(r&&r.crown?' 👑':'')+(r&&r.streak>=3?' 🔥'+r.streak:'')})}
+function hostLobby(){stopClock();
+  mount('h-lobby:'+G.session,()=>`<span class="sticker st-g">lobby</span><h2 id="cnt"></h2><p class="sub">Players: open this page's link → type a gamer tag → Join.</p><div id="who"></div>
+   <div class="row"><button class="btn g" id="go">Start: question 1 →</button><button class="btn q" id="reset">New game (clear lobby)</button></div><p class="note" id="hostErr"></p>`,
+   ()=>{$('cnt').textContent=players.length+' soul'+(players.length===1?'':'s')+' joined';
+     $('who').innerHTML=players.length?'<div class="chips">'+players.map(p=>`<span data-tag="${esc(p.id)}"></span>`).join('')+'</div>':'<p class="sub">No one yet.</p>';
+     fillTags(rowsFor(players,-1));$('go').onclick=()=>startQ(0);$('reset').onclick=newSession});}
+function qBody(q,forHost){
+  const opts=optsOf(q);
+  const code=q.lines?'<div class="lines">'+q.code.split('\n').map((l,i)=>`<div class="ln" data-line="${i}"><span class="n">${i+1}</span><span>${hl(l)||' '}</span></div>`).join('')+'</div>':(q.code?'<pre class="code">'+hl(q.code)+'</pre>':'');
+  return `<div class="qhead"><div class="row"><span class="sticker st-o">${esc(q.r)}</span><span class="note">${esc(q.tag)}</span></div><span class="count">Q${G.q+1} / ${QS.length}</span></div>
+   <div class="timer"><i id="tbar"></i></div><div class="prompt">${esc(q.prompt)}</div>${code}
+   <div class="opts" id="opts">${opts.map((o,k)=>`<${forHost?'div':'button'} class="opt c${k%5}" data-k="${k}"><span class="ic">${ICONS[k%5]}</span><span>${esc(o)}</span></${forHost?'div':'button'}>`).join('')}</div>`;
+}
+function hostQuestion(){
+  const q=QS[G.q];
+  mount('h-q:'+G.session+':'+G.q,()=>{setTimeout(()=>runClock(TIME,()=>{const a=$('ans');if(a)a.dataset.up='1';hostQuestion()}),0);
+    return qBody(q,true)+`<div class="row"><span class="count" id="ans"></span><button class="btn b" id="rev">Reveal answer</button><button class="btn q" id="skip">Skip</button><button class="btn q" id="endg">End game</button></div><h3>Live squad</h3><div id="lt"></div><p class="note" id="hostErr"></p>`},
+   ()=>{const rows=rowsFor(players,scoredUpTo());const n=rows.filter(r=>r.answered).length;const a=$('ans');
+     a.textContent=(a.dataset.up?'⏰ time’s up · ':'')+n+' / '+players.length+' answered';
+     $('lt').innerHTML=liveTable(rows,['ans','tag','aura','candy','kills','hits']);fillTags(rows,$('lt'));
+     $('rev').onclick=()=>hostSet({phase:'reveal'});$('skip').onclick=nextAfter();$('endg').onclick=()=>hostSet({phase:'end'})});
+}
+function hostReveal(){stopClock();
+  const q=QS[G.q],opts=optsOf(q),right=correctOpt(q);
+  mount('h-r:'+G.session+':'+G.q,()=>qBody(q,true)+`<div class="lore"><b id="pct"></b><div>${esc(q.lore)}</div></div><div class="bars" id="bars"></div>`+hostNav(),
+   ()=>{stage.querySelectorAll('.opt').forEach(el=>el.classList.add(+el.dataset.k===right?'right':'dim'));
+     if(q.lines){const ln=stage.querySelector('.ln[data-line="'+q.a+'"]');if(ln)ln.classList.add('good')}
+     const tb=$('tbar');if(tb)tb.style.transform='scaleX(0)';
+     const counts=opts.map((_,k)=>players.filter(p=>p.answers&&p.answers[G.q]&&p.answers[G.q].c===k).length);
+     const n=Math.max(1,counts.reduce((a,b)=>a+b,0)),pct=Math.round(100*counts[right]/n);
+     $('pct').textContent=pct+'% got it · '+(pct>=70?'the room ate 🔥':pct>=40?'mid':'the room got tricked 💀');
+     $('bars').innerHTML=opts.map((o,k)=>`<div class="bar ${k===right?'ok':''}"><span class="lab">${ICONS[k%5]} ${esc(o)}</span><span class="track"><span class="fill" style="width:${Math.round(100*counts[k]/n)}%;display:block"></span></span><span class="num">${counts[k]}</span></div>`).join('');
+     bindNav()});
+}
+function hostBoard(){stopClock();
+  mount('h-b:'+G.session+':'+G.q,()=>`<span class="sticker st-p">after Q${G.q+1}</span><h2>Leaderboards 🦇</h2><div class="two"><div><h3>Bytes 💾</h3><div id="ba"></div></div><div><h3>Candy haul 🍬</h3><div id="bc"></div></div></div>`+hostNav(),
+   ()=>{const rows=rowsFor(players,G.q);
+     $('ba').innerHTML='<ol class="board">'+rows.slice(0,10).map(r=>`<li><span class="t" data-tag="${esc(r.id)}"></span><span class="d">${r.last?'+'+r.last:''}</span><span class="s">${r.aura.toLocaleString()}</span></li>`).join('')+'</ol>';
+     const byC=rows.slice().sort((a,b)=>b.candies-a.candies||a.tag.localeCompare(b.tag));
+     $('bc').innerHTML='<ol class="board">'+byC.slice(0,10).map(r=>`<li><span class="t" data-tag="${esc(r.id)}"></span><span class="d">👻 ${r.kills}</span><span class="s">🍬 ${r.candies}</span></li>`).join('')+'</ol>';
+     fillTags(rows);bindNav()});
+}
+function hostTreats(){
+  mount('h-t:'+G.session+':'+G.startedAt,()=>{setTimeout(()=>runClock(TREAT_TIME,()=>{}),0);
+    return `<span class="sticker st-p">🍬 trick-or-treat break</span><h2>Knock knock, it's candy o'clock</h2><p class="sub">Everyone has a street of 12 doors: candy, one king-size bar, wrong doors (−3) and ghost doors that eat ALL your candy. ${TREAT_TIME} seconds.</p>
+     <div class="timer"><i id="tbar"></i></div><div class="bars" id="race"></div>
+     <div class="row"><button class="btn g" id="nxt">${nextLabel()}</button><button class="btn b" id="brd">Leaderboard</button><button class="btn q" id="endg">End game</button></div><p class="note" id="hostErr"></p>`},
+   ()=>{const rows=rowsFor(players,G.q).sort((a,b)=>b.candies-a.candies||a.tag.localeCompare(b.tag));const max=Math.max(1,...rows.map(r=>r.candies));
+     $('race').innerHTML=rows.slice(0,12).map(r=>`<div class="bar ok"><span class="lab" data-tag="${esc(r.id)}"></span><span class="track"><span class="fill" style="width:${Math.round(100*r.candies/max)}%;display:block;background:var(--pumpkin)"></span></span><span class="num">${r.candies}</span></div>`).join('')||'<p class="sub">No players yet.</p>';
+     fillTags(rows);$('nxt').onclick=()=>{stopClock();nextAfter()()};$('brd').onclick=()=>{stopClock();hostSet({phase:'board'})};$('endg').onclick=()=>{stopClock();hostSet({phase:'end'})}});
+}
+function hostCrypt(){stopClock();
+  mount('h-c:'+G.session,()=>`<span class="sticker st-o">the finish line</span><h2>The Crypt Gate 🏰</h2>
+   <div class="crown"><div class="c">👑🎃</div><b>The Golden Pumpkin Crown</b><span>First correct method wins it: +3000 bytes and the Hall of Fame.</span></div>
+   <pre class="code">${hl(CRYPT.starter)}</pre><ul class="sub" style="margin:0">${CRYPT.spec.map(s=>`<li>${esc(s)}</li>`).join('')}</ul>
+   <h3 id="unl"></h3><div id="lt"></div>
+   <div class="row"><button class="btn p" id="boss">Summon the Big Ghost 👻 →</button><button class="btn q" id="endg">Skip to results</button></div><p class="note" id="hostErr"></p>`,
+   ()=>{const rows=rowsFor(players,QS.length-1);const pass=rows.filter(r=>r.passed).sort((a,b)=>String(a.cryptAt).localeCompare(String(b.cryptAt)));
+     $('unl').textContent=pass.length?pass.length+' unlocked the crypt':'Nobody through yet…';
+     const ordered=pass.concat(rows.filter(r=>!r.passed));
+     $('lt').innerHTML=liveTable(ordered,['tag','crypt','aura','candy']);fillTags(ordered,$('lt'));
+     $('boss').onclick=()=>hostSet({phase:'boss',bossHp:1000,victory:false,startedAt:now()});$('endg').onclick=()=>hostSet({phase:'end'})});
+}
+function hostBoss(){stopClock();
+  mount('h-boss:'+G.session,()=>`<span class="sticker st-p">final stage · team fight</span><h2>Destroy the Big Ghost</h2>
+   <p class="sub">It's charging at everyone's screen. Slash it with your swords: tap, click or swipe. Crypt key holders hit twice as hard.</p>
+   <div id="gh" class="bigghost">${BIG_GHOST_SVG}</div><div class="hp"><i id="hpbar"></i><span id="hptxt"></span></div>
+   <h3>Top ghost hunters</h3><div id="lt"></div>
+   <div class="row"><button class="btn q" id="endg">End it now</button></div><p class="note" id="hostErr"></p>`,
+   ()=>{const dmg=totalDmg(),hp=Math.max(1,G.bossHp),left=Math.max(0,hp-dmg);
+     $('hpbar').style.transform='scaleX('+(left/hp)+')';$('hptxt').textContent=left+' / '+hp+' HP';
+     const g=$('gh');g.classList.remove('hit');void g.offsetWidth;if(dmg)g.classList.add('hit');
+     const rows=rowsFor(players,QS.length-1).sort((a,b)=>b.bossDmg-a.bossDmg);$('lt').innerHTML=liveTable(rows.slice(0,10),['tag','dmg','crypt']);fillTags(rows,$('lt'));
+     $('endg').onclick=()=>hostSet({phase:'end',victory:false});
+     if(left<=0&&!G.victory)hostSet({phase:'end',victory:true})});
+}
+let hallWritten=null;
+function hostEnd(){stopClock();
+  const rows=rowsFor(players,QS.length-1);const byC=rows.slice().sort((a,b)=>b.candies-a.candies);
+  const crown=rows.find(r=>r.crown);
+  if(db&&G.session&&hallWritten!==G.session&&rows.length){hallWritten=G.session;
+    db.doc('hall/'+G.session).set({at:now(),crown:crown?crown.tag:'',aura:rows[0].tag,candyKing:byC[0]&&byC[0].candies?byC[0].tag:'',victory:G.victory}).catch(()=>{})}
+  mount('h-end:'+G.session+':'+G.victory,()=>`<span class="sticker st-o">final</span>
+   <h1 style="font-size:clamp(2.2rem,8vw,4rem)">${G.victory?'The ghost is gone. The squad ate.':'The crypt has spoken'}</h1>
+   <div class="podium" id="pod"></div><div class="two"><div class="card"><h3>👑 Golden Pumpkin Crown</h3><span id="crown"></span></div><div class="card"><h3>🍬 Candy King</h3><span id="ck"></span></div></div>
+   <div id="lt"></div><div class="row"><button class="btn" id="again">New game</button><button class="btn q" id="back">Exit host mode</button></div><p class="note" id="hostErr"></p>`,
+   ()=>{const top=rows.slice(0,3),pod=[top[1],top[0],top[2]];
+     $('pod').innerHTML=pod.map((r,i)=>r?`<div class="p${[2,1,3][i]}"><b>${['🥈','🏆','🥉'][i]}</b><span data-tag="${esc(r.id)}"></span><span class="note">${r.aura.toLocaleString()} bytes</span></div>`:'<div style="visibility:hidden"></div>').join('');
+     $('crown').textContent=crown?crown.tag+' (first through the Crypt Gate)':'Nobody unlocked it this time.';
+     $('ck').textContent=byC[0]&&byC[0].candies?byC[0].tag+' with '+byC[0].candies+' candies':'No candy collected.';
+     $('lt').innerHTML=liveTable(rows,['tag','aura','candy','kills','hits','crypt','dmg']);fillTags(rows);
+     $('again').onclick=newSession;$('back').onclick=()=>{mode='landing';render()}});
+}
+
+/* ================= PLAYER ================= */
+let me={tag:'',answers:{},candies:0,ghostHits:0,ghostKills:0,crypt:{passed:false,at:null,tries:0},bossDmg:0},recvAt=0,joinedSession=null;
+let pchain=Promise.resolve(),statTimer=null;
+function pwrite(data){if(!db)return;pchain=pchain.then(()=>db.collection('players').doc(myId).update(data)).catch(()=>{const n=$('pErr');if(n)n.textContent='Your progress isn’t saving. Connection lost. Refresh the page; your progress is kept.'})}
+function saveStats(){if(statTimer)return;statTimer=setTimeout(()=>{statTimer=null;pwrite({candies:me.candies,ghostHits:me.ghostHits,ghostKills:me.ghostKills,bossDmg:me.bossDmg})},600)}
+async function joinGame(){
+  const t=($('tag').value||'').trim().replace(/\s+/g,' ').slice(0,16);
+  if(!t){$('tag').classList.remove('shake');void $('tag').offsetWidth;$('tag').classList.add('shake');$('tag').focus();return}
+  if(!db){$('joinNote').textContent='Can\u2019t reach the game server. Refresh and try again.';return}
+  ls.set('tag',t);me.tag=t;mode='player';stage.dataset.k='';await ensureJoined();render();
+}
+async function ensureJoined(){
+  if(!db||!G.session||joinedSession===G.session)return;
+  const ref=db.collection('players').doc(myId);
+  try{const s=await ref.get();const d=s.exists?s.data():null;
+    if(d&&d.session===G.session){Object.assign(me,{answers:d.answers||{},candies:d.candies||0,ghostHits:d.ghostHits||0,ghostKills:d.ghostKills||0,crypt:d.crypt||{passed:false,at:null,tries:0},bossDmg:d.bossDmg||0});if(d.tag!==me.tag)await ref.update({tag:me.tag})}
+    else{Object.assign(me,{answers:{},candies:0,ghostHits:0,ghostKills:0,crypt:{passed:false,at:null,tries:0},bossDmg:0});
+      await ref.set({tag:me.tag,session:G.session,answers:{},candies:0,ghostHits:0,ghostKills:0,crypt:{passed:false,at:null,tries:0},bossDmg:0,joinedAt:now()})}
+    joinedSession=G.session;planEvents();
+  }catch(e){joinedSession=null;const n=$('pErr');if(n)n.textContent='You can watch, but your answers won’t save. Connection lost. Refresh the page; your progress is kept.'}
+}
+function onPlayerGame(){if(G.session&&joinedSession!==G.session){joinedSession=null;ensureJoined().then(render)}}
+function selfRow(){const list=players.length?players.map(p=>p.id===myId?{...p,...me}:p):[{id:myId,...me}];if(!list.find(p=>p.id===myId))list.push({id:myId,...me});return list}
+function renderPlayer(){
+  const rows=rowsFor(selfRow(),scoredUpTo());const mine=rows.find(r=>r.id===myId)||{aura:0,candies:0};
+  setHud('@'+me.tag,mine.aura,me.candies);
+  if(G.phase!=='question'&&G.phase!=='treats')clearEvents();
+  if(!G.session||G.phase==='idle'){stopClock();return mount('p-wait',()=>`<h2>You're in 🕯️</h2><p class="sub">Waiting for the host to open the crypt…</p><p class="note" id="pErr"></p>`)}
+  if(G.phase==='lobby'){stopClock();return mount('p-lobby:'+G.session,()=>`<span class="sticker st-g">lobby</span><h2>You're in. Don't leave 👻</h2><p class="sub" id="cnt"></p>
+    <div class="crown"><div class="c">👑🎃</div><b>Eyes on the prize</b><span>Survive ${QS.length} questions, then crack the Crypt Gate for the Golden Pumpkin Crown.</span></div><p class="note" id="pErr"></p>`,
+    ()=>{$('cnt').textContent=players.length+' soul'+(players.length===1?'':'s')+' here. The host starts when everyone’s ready.'})}
+  ({question:pQuestion,reveal:()=>pReveal(rows,mine),board:()=>pReveal(rows,mine),treats:pTreats,crypt:pCrypt,boss:pBoss,end:()=>pEnd(rows,mine)}[G.phase]||(()=>{}))();
+}
+function progressHtml(){const pct=Math.round(100*Math.max(0,G.q+1)/QS.length);return `<div class="progress"><span>🎃 Q${G.q+1}/${QS.length}</span><span class="track"><i style="width:${pct}%"></i></span><span>🏰👑</span></div>`}
+function pQuestion(){
+  const q=QS[G.q],ans=me.answers[G.q];
+  mount('p-q:'+G.session+':'+G.q,()=>{recvAt=Date.now();setTimeout(()=>{if(!me.answers[G.q])runClock(TIME,lockOut);startEvents(G.q)},0);
+    return progressHtml()+qBody(q,false)+`<p class="lore" id="pState" style="margin:0">Pick fast. Speed = bonus bytes.</p><p class="note" id="pErr"></p>`},
+   ()=>{stage.querySelectorAll('#opts .opt').forEach(b=>b.onclick=()=>answer(+b.dataset.k));
+     if(q.lines)stage.querySelectorAll('.ln').forEach(l=>{const k=lineIdx(q).indexOf(+l.dataset.line);if(k>=0){l.style.cursor='pointer';l.onclick=()=>answer(k)}});
+     if(ans)markAnswered(ans.c)});
+}
+function markAnswered(k){stopClock();const q=QS[G.q];
+  stage.querySelectorAll('#opts .opt').forEach(b=>{b.disabled=true;b.classList.toggle('mine',+b.dataset.k===k);if(+b.dataset.k!==k)b.classList.add('dim')});
+  if(q.lines){const l=stage.querySelector('.ln[data-line="'+lineIdx(q)[k]+'"]');if(l)l.classList.add('pick')}
+  const s=$('pState');if(s)s.textContent='Locked in. No take-backs 🦇 Watch out for ghosts…'}
+function lockOut(){if(me.answers[G.q])return;stage.querySelectorAll('#opts .opt').forEach(b=>{b.disabled=true;b.classList.add('dim')});
+  stage.querySelectorAll('.ln').forEach(l=>l.onclick=null);const s=$('pState');if(s)s.textContent='⏰ Time’s up. The ghosts took this one.'}
+function answer(k){
+  if(G.phase!=='question'||me.answers[G.q])return;
+  const ms=Date.now()-recvAt;if(ms>TIME*1000+500)return lockOut();
+  me.answers={...me.answers,[G.q]:{c:k,ms}};markAnswered(k);pwrite({answers:{[G.q]:{c:k,ms}}});
+}
+function pReveal(rows,mine){stopClock();
+  const q=QS[G.q],ans=me.answers[G.q],ok=ans&&ans.c===correctOpt(q),rank=rows.findIndex(r=>r.id===myId)+1;
+  mount('p-r:'+G.session+':'+G.q,()=>{setTimeout(()=>ok?floatText('+'+mine.last+' '+pick(WIN),'var(--slime)'):floatText(pick(LOSE),'var(--blood)'),0);
+    return progressHtml()+`<div class="verdict ${ok?'ok':'no'}">${ok?pick(['W 🔥','ate 👻','slay 🎃']):ans?'tricked 💀':'ghosted ⏰'}</div>
+     <p class="sub">${ok?'+'+mine.last.toLocaleString()+' bytes'+(mine.streak>=2?' · streak '+mine.streak+' 🔥':''):'Streak reset. Shake it off.'}</p>
+     <div class="row"><span class="pill o" id="ra"></span><span class="pill" id="rk"></span><span class="pill" id="rc"></span></div>
+     <div class="lore"><b>The tea</b><div>${esc(q.lore)}</div></div><p class="note">Eyes on the big screen. The host is spilling more.</p><p class="note" id="pErr"></p>`},
+   ()=>{$('ra').textContent=mine.aura.toLocaleString()+' bytes';$('rk').textContent='#'+rank+' of '+rows.length;$('rc').textContent='🍬 '+me.candies});
+}
+function pEnd(rows,mine){stopClock();cancelAnimationFrame(bossRaf);
+  const rank=rows.findIndex(r=>r.id===myId)+1;
+  mount('p-end:'+G.session+':'+G.victory,()=>`<span class="sticker st-o">final</span><div class="verdict ${G.victory?'ok':'no'}">${G.victory?'ghost slain 🎉':'game over 🦇'}</div>
+    <div class="big" id="ea"></div><h2 id="et"></h2><div class="row"><span class="pill" id="er"></span><span class="pill" id="ec"></span></div><p class="note">Stay on this page and you'll join the next game automatically.</p>`,
+   ()=>{$('ea').textContent=mine.aura.toLocaleString();
+     $('et').textContent=mine.crown?'👑 Golden Pumpkin royalty':rank===1?'JVM Overlord 🏆':rank&&rank<=3?"podium. unc's still got it 🔥":mine.aura>=5000?'Runtime Royalty ☕':mine.aura>=2500?'Still compiling… lowkey cooking':'Garbage collected 🗑️ (for now)';
+     $('er').textContent='#'+rank+' of '+rows.length;$('ec').textContent='🍬 '+me.candies+' candies'});
+}
+
+/* -------- random events: candy, ghosts, one jump scare -------- */
+let evTimers=[],plan=null;
+function planEvents(){
+  const k='plan:'+G.session;plan=ls.get(k,null);
+  if(!plan){const idx=shuffle([...Array(QS.length).keys()].slice(1));plan={ghostQs:idx.slice(0,2),scareQ:2+Math.floor(Math.random()*5),scared:false};ls.set(k,plan)}
+}
+function clearEvents(){evTimers.forEach(clearTimeout);evTimers=[];document.querySelectorAll('.candy-pop').forEach(e=>e.remove())}
+function later(fn,ms){evTimers.push(setTimeout(fn,ms))}
+function startEvents(qi){
+  clearEvents();if(!plan)planEvents();
+  const fast=location.hash==='#test-events';
+  if(Math.random()<0.7||fast)later(spawnCandy,fast?300:rnd(3000,20000));
+  if(Math.random()<0.35)later(spawnCandy,rnd(8000,24000));
+  if(plan.ghostQs.includes(qi)||fast)later(()=>spawnGhost('quiz'),fast?600:rnd(5000,14000));
+  if(plan.scareQ===qi&&!plan.scared)later(jumpScare,rnd(4000,11000));
+}
+function spawnCandy(){
+  if(G.phase!=='question'&&G.phase!=='treats')return;
+  const b=document.createElement('button');b.className='candy-pop';b.type='button';b.setAttribute('aria-label','Grab the candy');b.textContent=pick(['🍬','🍭','🍫','🍬']);
+  b.style.left=rnd(6,80)+'vw';b.style.top=rnd(18,78)+'vh';
+  b.onclick=()=>{const n=1+Math.floor(Math.random()*3);me.candies+=n;saveStats();setHud('@'+me.tag,rowsFor(selfRow(),scoredUpTo()).find(r=>r.id===myId).aura,me.candies);floatText('+'+n+' 🍬','var(--tn)');b.remove()};
+  document.body.appendChild(b);later(()=>b.remove(),2600);
+}
+function spawnGhost(kind,onResult){
+  if(document.querySelector('.ghost-attack'))return;
+  const word=pick(WORDS);const el=document.createElement('div');el.className='ghost-attack';el.setAttribute('role','dialog');el.setAttribute('aria-label','Ghost attack');
+  el.innerHTML=`<div class="gsvg">${GHOST_SVG}</div><h3>${kind==='door'?'A ghost wants ALL your candy!':'A ghost wants your bytes!'}</h3><p class="note">Type the spell (keyboard or tap the letters) to banish it.</p><div class="gt"><i></i></div><div id="spellBox"></div>`;
+  document.body.appendChild(el);const bar=el.querySelector('.gt i');const end=Date.now()+GHOST_TIME*1000;
+  const iv=setInterval(()=>{const f=Math.max(0,(end-Date.now())/(GHOST_TIME*1000));bar.style.transform='scaleX('+f+')';if(f<=0)finish(false)},100);
+  let done=false;const sp=makeSpell(el.querySelector('#spellBox'),word,()=>finish(true));
+  function finish(ok){if(done)return;done=true;clearInterval(iv);sp.cancel();el.remove();
+    if(ok){me.ghostKills++;me.candies+=kind==='door'?3:2;floatText('banished 👻 +'+(kind==='door'?3:2)+' 🍬','var(--slime)')}
+    else{if(kind==='door'){me.candies=0;floatText('ghost ate ALL your candy 💀','var(--blood)')}else{me.ghostHits++;me.candies=Math.max(0,me.candies-3);floatText('-250 bytes 💀','var(--blood)')}}
+    saveStats();render();onResult&&onResult(ok)}
+}
+function jumpScare(){
+  if(!plan||plan.scared||G.phase!=='question')return;plan.scared=true;ls.set('plan:'+G.session,plan);
+  const el=document.createElement('div');el.className='scare';el.innerHTML=BIG_GHOST_SVG+'<b>BOO!</b>';document.body.appendChild(el);
+  setTimeout(()=>el.remove(),reduce?700:1150);
+}
+
+/* -------- trick-or-treat street -------- */
+let street=null;
+function pTreats(){
+  const key='p-t:'+G.session+':'+G.startedAt;
+  mount(key,()=>{
+    const pool=shuffle([...Array(7)].map(()=>({t:'candy',n:1+Math.floor(Math.random()*4)})).concat([{t:'king'},{t:'ghost'},{t:'ghost'},{t:'rotten'},{t:'dentist'}]));
+    street={key,doors:pool,open:{},left:TREAT_TIME};
+    setTimeout(()=>{runClock(TREAT_TIME,()=>{street.closed=true;const s=$('tstat');if(s)s.textContent='Street’s closed. Back to the quiz soon 🎃';});clearEvents();
+      if(Math.random()<0.8)later(spawnCandy,rnd(6000,30000))},0);
+    return `<span class="sticker st-p">🍬 trick-or-treat</span><h2>Knock on doors. Grab candy.</h2><p class="sub">Wrong doors cost you 3 candies. A ghost door eats <b>ALL</b> your candy unless you banish it in time. ${TREAT_TIME}s on the clock.</p>
+      <div class="timer"><i id="tbar"></i></div><div class="doors" id="doors">${pool.map((d,i)=>`<button class="door" data-i="${i}" aria-label="Door ${i+1}">🚪</button>`).join('')}</div><p class="lore" id="tstat" style="margin:0">Pick a door. Any door.</p><p class="note" id="pErr"></p>`},
+   ()=>{if(!street||street.key!==key)return;stage.querySelectorAll('.door').forEach(b=>b.onclick=()=>knock(+b.dataset.i,b))});
+}
+function knock(i,b){
+  if(street.closed||street.open[i]||document.querySelector('.ghost-attack'))return;street.open[i]=true;const d=street.doors[i];b.classList.add('open');b.disabled=true;
+  const say=(em,t)=>{b.innerHTML=`<span class="em">${em}</span>${esc(t)}`};const st=$('tstat');
+  if(d.t==='candy'){me.candies+=d.n;say('🍬','+'+d.n);st.textContent=pick(['Nice haul.','Sweet.','Keep knocking 🎃'])}
+  else if(d.t==='king'){me.candies+=8;say('🍫','KING SIZE +8');st.textContent='A full-size bar?! Legendary house.';floatText('+8 🍫','var(--tn)')}
+  else if(d.t==='rotten'){me.candies=Math.max(0,me.candies-3);say('🍎','rotten −3');st.textContent='Wrong door: a rotten apple. −3 candies.';floatText('-3 🍬','var(--blood)')}
+  else if(d.t==='dentist'){me.candies=Math.max(0,me.candies-3);say('🪥','dentist −3');st.textContent='Wrong door: the dentist confiscated 3 candies.';floatText('-3 🍬','var(--blood)')}
+  else{say('👻','BOO');st.textContent='Ghost at the door! Banish it or it eats ALL your candy.';spawnGhost('door')}
+  saveStats();setHud('@'+me.tag,rowsFor(selfRow(),scoredUpTo()).find(r=>r.id===myId).aura,me.candies);
+}
+
+/* -------- crypt gate (code challenge) -------- */
+function pCrypt(){stopClock();
+  mount('p-c:'+G.session,()=>`<span class="sticker st-o">the finish line</span><h2>The Crypt Gate 🏰</h2>
+    <div class="crown"><div class="c">👑🎃</div><b>The Golden Pumpkin Crown</b><span>First soul with a working method gets +3000 bytes and the Hall of Fame. Everyone who unlocks it gets +2000 and double damage on the final boss.</span></div>
+    <ul class="sub" style="margin:0">${CRYPT.spec.map(s=>`<li>${esc(s)}</li>`).join('')}</ul>
+    <textarea class="codein" id="code" spellcheck="false" aria-label="Your method"></textarea>
+    <div class="row"><button class="btn" id="cast">Unlock the gate 🔑</button><span class="note" id="tries"></span></div><div id="fb"></div><p class="note" id="pErr"></p>`,
+   ()=>{const ta=$('code');if(!ta.value)ta.value=ls.get('code:'+G.session,CRYPT.starter);
+     ta.oninput=()=>ls.set('code:'+G.session,ta.value);
+     ta.onkeydown=e=>{if(e.key==='Tab'){e.preventDefault();const s=ta.selectionStart;ta.setRangeText('    ',s,ta.selectionEnd,'end')}};
+     $('tries').textContent=me.crypt.tries?me.crypt.tries+' attempt'+(me.crypt.tries===1?'':'s'):'';
+     if(me.crypt.passed){$('cast').disabled=true;ta.readOnly=true;$('fb').innerHTML='<div class="fb ok">🔓 Unlocked. Stay sharp: the Big Ghost is coming.</div>'}
+     $('cast').onclick=castCode});
+}
+function heuristic(code){
+  const c=code.replace(/\/\/.*$/gm,'').replace(/\/\*[\s\S]*?\*\//g,'');
+  const fails=[];
+  if(/\b(double|float)\b/.test(c))fails.push('No double or float anywhere: money stays BigDecimal.');
+  if(!/\.multiply\s*\(/.test(c))fails.push('Where’s the multiplication? BigDecimal has multiply(...).');
+  if(!/BigDecimal\.valueOf\s*\(\s*qty\s*\)|new\s+BigDecimal\s*\(\s*qty\s*\)/.test(c))fails.push('Turn qty into a BigDecimal first (BigDecimal.valueOf(qty)).');
+  if(!/setScale\s*\(\s*2\s*,\s*(java\.math\.)?RoundingMode\.HALF_UP\s*\)/.test(c))fails.push('Round to 2 decimals with HALF_UP: setScale(2, RoundingMode.HALF_UP).');
+  if(!/throw\s+new\s+IllegalArgumentException/.test(c))fails.push('Invalid input should throw IllegalArgumentException.');
+  if(!/price\s*==\s*null|null\s*==\s*price|Objects\.isNull\s*\(\s*price\s*\)/.test(c))fails.push('Check for a null price.');
+  if(!/qty\s*<\s*0|0\s*>\s*qty|qty\s*<=\s*-\s*1/.test(c))fails.push('Check for a negative qty.');
+  if(!/\breturn\b/.test(c))fails.push('Your method never returns anything.');
+  return fails.length?{pass:false,feedback:fails[0],by:'auto-check'}:{pass:true,feedback:'Clean spell. The gate creaks open.',by:'auto-check'};
+}
+async function grade(code){
+  if(sample){
+    try{
+      const prompt=`You are grading a beginner's Java method for a training game. Be fair but strict about the spec.\nSPEC: static BigDecimal lineTotal(BigDecimal price, int qty)\n- returns price multiplied by qty, rounded to 2 decimal places with RoundingMode.HALF_UP\n- throws IllegalArgumentException if price is null or qty is negative (qty == 0 is allowed)\n- never uses double or float\nIgnore missing imports and minor style. It must compile in principle.\nCODE:\n${code}\nReply with JSON only: {"pass": true|false, "feedback": "one short, friendly sentence; if failing, name the first problem without giving the full solution"}`;
+      const r=await sample.json(prompt,{modelTier:'quick',cache:false,code});
+      if(r&&typeof r.pass==='boolean')return {pass:r.pass,feedback:String(r.feedback||'').slice(0,240),by:'Claude'};
+    }catch(e){}
+  }
+  return heuristic(code);
+}
+let grading=false;
+async function castCode(){
+  if(grading||me.crypt.passed)return;const code=$('code').value;if(code.trim().length<20)return;
+  grading=true;$('cast').disabled=true;$('cast').textContent='Checking the spell…';
+  const r=await grade(code);grading=false;
+  me.crypt={...me.crypt,tries:(me.crypt.tries||0)+1};
+  if(r.pass){me.crypt.passed=true;me.crypt.at=now();floatText('CRYPT UNLOCKED 👑','var(--tn)')}
+  pwrite({crypt:me.crypt});render();
+  const fb=$('fb');if(fb){fb.innerHTML='';const d=document.createElement('div');d.className='fb '+(r.pass?'ok':'no');d.textContent=(r.pass?'🔓 ':'🔒 ')+r.feedback+' ('+r.by+')';fb.appendChild(d)}
+  const b=$('cast');if(b&&!r.pass){b.disabled=false;b.textContent='Unlock the gate 🔑'}
+}
+
+/* -------- final boss (team): sword slashing -------- */
+const SLASH_DMG=5, APPROACH=0.07, START_SCALE=0.35, MAX_SCALE=1.55, KNOCKBACK=0.055;
+let bossRaf=null,bossScale=START_SCALE,lastSwipeHit=0;
+function pBoss(){stopClock();
+  const mult=me.crypt.passed?2:1;
+  mount('p-boss:'+G.session,()=>{setTimeout(startBossFight,0);return `<span class="sticker st-p">final stage · team fight</span><h2>Slash the Big Ghost ⚔️</h2>
+    <div class="hp"><i id="hpbar"></i><span id="hptxt"></span></div>
+    <p class="sub">It's coming for you. Tap, click or swipe across it to slash. Every hit knocks it back. Let it reach you and it bites (−250 bytes). ${mult===2?'You hold the crypt key: <b>double damage</b> ⚔️⚔️':SLASH_DMG+' damage per slash.'}</p>
+    <div class="arena" id="arena"><div class="bossg" id="bg"><div class="bossg-in">${BIG_GHOST_SVG}</div></div></div>
+    <div class="row"><span class="pill" id="mydmg"></span></div><p class="note" id="pErr"></p>`},
+   ()=>{const dmg=totalDmg(),hp=Math.max(1,G.bossHp),left=Math.max(0,hp-dmg);
+     $('hpbar').style.transform='scaleX('+(left/hp)+')';$('hptxt').textContent=left+' / '+hp+' HP';$('mydmg').textContent='your damage: '+me.bossDmg});
+}
+function slashFx(x,y,dmg){
+  const s1=document.createElement('div');s1.className='slash';s1.style.left=x+'px';s1.style.top=y+'px';s1.style.setProperty('--r',(Math.random()*70-35)+'deg');
+  document.body.appendChild(s1);setTimeout(()=>s1.remove(),350);
+  const t=document.createElement('div');t.className='dmgpop';t.textContent='-'+dmg;t.style.left=x+'px';t.style.top=y+'px';document.body.appendChild(t);setTimeout(()=>t.remove(),700);
+}
+function bossHit(x,y){
+  if(G.phase!=='boss')return;const dmg=SLASH_DMG*(me.crypt.passed?2:1);
+  me.bossDmg+=dmg;saveStats();bossScale=Math.max(START_SCALE*0.85,bossScale-KNOCKBACK);slashFx(x,y,dmg);
+  const g=$('bg');if(g){g.classList.remove('hit');void g.offsetWidth;g.classList.add('hit')}
+  const m=$('mydmg');if(m)m.textContent='your damage: '+me.bossDmg;
+}
+function startBossFight(){
+  cancelAnimationFrame(bossRaf);bossScale=START_SCALE;let last=performance.now();
+  const arena=$('arena'),g=$('bg');if(!arena||!g)return;
+  g.addEventListener('pointerdown',e=>{e.preventDefault();bossHit(e.clientX,e.clientY)});
+  g.addEventListener('pointermove',e=>{if(e.buttons!==1&&e.pointerType==='mouse')return;if(e.pointerType!=='mouse'||e.buttons===1){const n=performance.now();if(n-lastSwipeHit>140){lastSwipeHit=n;bossHit(e.clientX,e.clientY)}}});
+  const step=t=>{
+    if(G.phase!=='boss'||!document.body.contains(g))return;
+    const dt=Math.min(0.1,(t-last)/1000);last=t;bossScale+=dt*APPROACH;
+    if(bossScale>=MAX_SCALE){bossScale=0.7;me.ghostHits++;saveStats();floatText('it bit you! −250 bytes 💀','var(--blood)');
+      arena.classList.remove('bitten');void arena.offsetWidth;arena.classList.add('bitten')}
+    g.style.transform='translate(-50%,-50%) scale('+bossScale.toFixed(3)+')';
+    bossRaf=requestAnimationFrame(step)};
+  bossRaf=requestAnimationFrame(step);
+}
+
+render();boot();
+
+})();
+</script>
+
+</body></html>
