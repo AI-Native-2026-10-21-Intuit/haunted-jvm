@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: haunted-jvm
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: HOST_KEY          # the host link is https://<your-app>.onrender.com/?host=<HOST_KEY>
+        generateValue: true
+      - key: ANTHROPIC_API_KEY # optional: Claude grades the Crypt Gate code. Leave empty to use the built-in checker.
+        sync: false

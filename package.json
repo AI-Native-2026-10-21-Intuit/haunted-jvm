@@ -1,0 +1,16 @@
+{
+  "name": "haunted-jvm",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The Haunted JVM: a live, host-controlled Halloween party game for the SWE1 Week 1 recap.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "ws": "8.18.0"
+  }
+}
